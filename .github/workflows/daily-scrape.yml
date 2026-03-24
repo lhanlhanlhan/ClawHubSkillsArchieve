@@ -13,6 +13,10 @@ on:
         description: "Mode: artifact or push"
         required: true
         default: "artifact"
+      sort_by:
+        description: "Sort by: downloads or installs"
+        required: true
+        default: "downloads"
 
 permissions:
   contents: write
@@ -23,6 +27,7 @@ jobs:
     env:
       TOP_N: ${{ github.event.inputs.top_n || '50' }}
       MODE: ${{ github.event.inputs.mode || 'artifact' }}
+      SORT_BY: ${{ github.event.inputs.sort_by || 'downloads' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -34,7 +39,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          python3 scrape_clawhub_top_skills.py --top "$TOP_N"
+          python3 scrape_clawhub_top_skills.py --top "$TOP_N" --sort-by "$SORT_BY"
 
       - name: Upload artifact
         if: ${{ env.MODE == 'artifact' }}

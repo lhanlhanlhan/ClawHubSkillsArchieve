@@ -356,19 +356,23 @@ def main() -> int:
     parser.add_argument("--output", type=str, default="")
     parser.add_argument("--repo", type=str, default="clawdbot/skills")
     parser.add_argument("--ref", type=str, default="main")
+    parser.add_argument("--sort-by", type=str, default="downloads", choices=["downloads", "installs"])
     args = parser.parse_args()
 
     top_n = int(args.top)
     repo = str(args.repo).strip()
     ref = str(args.ref).strip() or "main"
     output_dir = str(args.output).strip() or f"archives/top{top_n}"
+    sort_by = str(args.sort_by).strip()
 
     meta_dir = os.path.join(output_dir, "metadata")
     skills_dir = os.path.join(output_dir, "skills")
     os.makedirs(meta_dir, exist_ok=True)
     os.makedirs(skills_dir, exist_ok=True)
 
-    print(f"[run] repo={repo} ref={ref} top={top_n} output={output_dir}")
+    print(f"[run] repo={repo} ref={ref} top={top_n} output={output_dir} sort_by={sort_by}")
+    if sort_by == "installs":
+        print("[rank] installs not available, fallback to downloads")
     ranking = fetch_top_skills(top_n)
     if not ranking:
         print("[run] no ranking, exiting")
@@ -422,6 +426,7 @@ def main() -> int:
                 "version": version,
                 "display_name": display_name,
                 "downloads": downloads,
+                "installs": downloads if sort_by == "installs" else None,
                 "stars": stars,
                 "published_at": published_at,
                 "commit": commit_url or None,
@@ -448,6 +453,7 @@ def main() -> int:
         "repo": repo,
         "ref": ref,
         "ranking_source": "https://clawskills.sh/",
+        "ranking_metric": sort_by,
         "top": top_n,
         "total": len(results),
         "success": success,
@@ -459,9 +465,10 @@ def main() -> int:
     _write_json(manifest_path, manifest)
 
     csv_lines = [
-        "rank,owner,slug,version,downloads,stars,clawhub_url,github_url,archive_dir,archived,meta_file",
+        "rank,owner,slug,version,downloads,installs,stars,clawhub_url,github_url,archive_dir,archived,meta_file",
     ]
     for r in results:
+        installs = r["downloads"] if sort_by == "installs" else ""
         csv_lines.append(
             ",".join(
                 [
@@ -470,6 +477,7 @@ def main() -> int:
                     str(r["slug"]).replace(",", ";"),
                     str(r["version"]).replace(",", ";"),
                     str(r["downloads"]).replace(",", ";"),
+                    str(installs).replace(",", ";"),
                     str(r["stars"]).replace(",", ";"),
                     str(r["clawhub_url"]),
                     str(r["github_url"]),
