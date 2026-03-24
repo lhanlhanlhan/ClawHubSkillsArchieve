@@ -357,6 +357,7 @@ def main() -> int:
     parser.add_argument("--repo", type=str, default="clawdbot/skills")
     parser.add_argument("--ref", type=str, default="main")
     parser.add_argument("--sort-by", type=str, default="downloads", choices=["downloads", "installs"])
+    parser.add_argument("--strict", action="store_true")
     args = parser.parse_args()
 
     top_n = int(args.top)
@@ -370,7 +371,7 @@ def main() -> int:
     os.makedirs(meta_dir, exist_ok=True)
     os.makedirs(skills_dir, exist_ok=True)
 
-    print(f"[run] repo={repo} ref={ref} top={top_n} output={output_dir} sort_by={sort_by}")
+    print(f"[run] repo={repo} ref={ref} top={top_n} output={output_dir} sort_by={sort_by} strict={args.strict}")
     if sort_by == "installs":
         print("[rank] installs not available, fallback to downloads")
     ranking = fetch_top_skills(top_n)
@@ -491,7 +492,9 @@ def main() -> int:
     csv_path = os.path.join(output_dir, f"top{top_n}_skills_summary.csv")
     _write_text(csv_path, "\n".join(csv_lines) + "\n")
 
-    return 0 if failed == 0 else 1
+    if args.strict and failed > 0:
+        return 1
+    return 0
 
 
 if __name__ == "__main__":
