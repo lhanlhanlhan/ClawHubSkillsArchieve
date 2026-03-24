@@ -1,0 +1,45 @@
+name: Daily Scrape Top Skills
+
+on:
+  schedule:
+    - cron: "0 0 * * *"
+  workflow_dispatch:
+    inputs:
+      top_n:
+        description: "Top N skills to archive"
+        required: true
+        default: "50"
+
+permissions:
+  contents: write
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    env:
+      TOP_N: ${{ github.event.inputs.top_n || '50' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Run scraper
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python3 scrape_clawhub_top_skills.py --top "$TOP_N"
+
+      - name: Commit and push results
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          if [ -z "$(git status --porcelain)" ]; then
+            exit 0
+          fi
+          BRANCH="${GITHUB_REF_NAME}"
+          git checkout --orphan snapshot
+          git add -A
+          git commit -m "chore: snapshot top ${TOP_N} skills $(date -u +%Y-%m-%d)"
+          git push -f origin "HEAD:${BRANCH}"
