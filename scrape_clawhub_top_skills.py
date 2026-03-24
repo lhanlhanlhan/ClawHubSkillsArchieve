@@ -51,20 +51,25 @@ def _fetch_bytes(url: str, *, accept: str, retries: int = 3, delay_s: float = 1.
                 return resp.read()
         except urllib.error.HTTPError as e:
             if e.code == 404:
+                print(f"[fetch] 404: {url}")
                 return None
             if e.code == 403:
                 remaining = (e.headers.get("X-RateLimit-Remaining") or "").strip()
                 if remaining == "0" or "rate limit" in str(getattr(e, "reason", "")).lower():
+                    print(f"[fetch] rate limited: {url}")
                     if attempt < retries - 1:
                         time.sleep(delay_s * (2**attempt))
                         continue
                     return None
             if e.code in (403, 429) and attempt < retries - 1:
+                print(f"[fetch] retrying {e.code} ({attempt + 1}/{retries}): {url}")
                 time.sleep(delay_s * (2**attempt))
                 continue
+            print(f"[fetch] http error {e.code}: {url}")
             raise
         except Exception:
             if attempt < retries - 1:
+                print(f"[fetch] retrying error ({attempt + 1}/{retries}): {url}")
                 time.sleep(delay_s * (2**attempt))
                 continue
             raise
@@ -167,12 +172,16 @@ def _parse_clawskills_text(text: str, top_n: int) -> list[dict[str, object]]:
 
 
 def fetch_top_skills(top_n: int) -> list[dict[str, object]]:
+    print(f"[rank] fetching top {top_n} from clawskills.sh")
     html_bytes = _fetch_bytes("https://clawskills.sh/", accept="text/html", retries=3)
     if not html_bytes:
+        print("[rank] failed to fetch clawskills.sh")
         return []
     html = html_bytes.decode("utf-8", errors="replace")
     text = _strip_html_to_text(html)
-    return _parse_clawskills_text(text, top_n)
+    entries = _parse_clawskills_text(text, top_n)
+    print(f"[rank] parsed {len(entries)} entries")
+    return entries
 
 
 def _github_raw_url(repo: str, ref: str, path: str) -> str:
@@ -183,6 +192,7 @@ def fetch_meta(repo: str, ref: str, owner: str, slug: str) -> dict[str, object] 
     url = _github_raw_url(repo, ref, f"skills/{owner}/{slug}/_meta.json")
     data = _fetch_bytes(url, accept="application/json, */*", retries=2)
     if not data:
+        print(f"[meta] missing: {owner}/{slug}")
         return None
     try:
         meta = json.loads(data)
@@ -195,6 +205,7 @@ def _list_repo_files_recursive(repo: str, path: str) -> list[dict[str, str]]:
     url = f"https://api.github.com/repos/{repo}/contents/{path}"
     data = _fetch_json(url, retries=3)
     if not isinstance(data, list):
+        print(f"[list] no content list: {path}")
         return []
 
     files: list[dict[str, str]] = []
@@ -261,17 +272,21 @@ def _has_contents_api_dir(repo: str, path: str) -> bool:
 def _resolve_slug_path(repo: str, owner: str, slug_guess: str, canonical_slug: str) -> str:
     token = _get_env("GITHUB_TOKEN")
     if not token:
+        print(f"[slug] no token, using guess: {owner}/{slug_guess}")
         return slug_guess
 
     guess_path = f"skills/{owner}/{slug_guess}"
     if _has_contents_api_dir(repo, guess_path):
+        print(f"[slug] resolved: {owner}/{slug_guess}")
         return slug_guess
 
     if canonical_slug and canonical_slug != slug_guess:
         canonical_path = f"skills/{owner}/{canonical_slug}"
         if _has_contents_api_dir(repo, canonical_path):
+            print(f"[slug] resolved canonical: {owner}/{canonical_slug}")
             return canonical_slug
 
+    print(f"[slug] fallback to guess: {owner}/{slug_guess}")
     return slug_guess
 
 
@@ -281,6 +296,7 @@ def download_skill_dir(repo: str, ref: str, owner: str, slug_path: str, skills_o
 
     wrote_any = False
     if not files:
+        print(f"[archive] fallback raw: {owner}/{slug_path}")
         for fname in ["SKILL.md", "_meta.json"]:
             raw_url = _github_raw_url(repo, ref, f"{root}/{fname}")
             content = _fetch_bytes(raw_url, accept="application/octet-stream, */*", retries=2)
@@ -291,6 +307,7 @@ def download_skill_dir(repo: str, ref: str, owner: str, slug_path: str, skills_o
             wrote_any = True
         return wrote_any
 
+    print(f"[archive] files: {owner}/{slug_path} ({len(files)})")
     for file_item in files:
         dl_url = file_item["download_url"]
         file_path = file_item["path"]
@@ -351,8 +368,10 @@ def main() -> int:
     os.makedirs(meta_dir, exist_ok=True)
     os.makedirs(skills_dir, exist_ok=True)
 
+    print(f"[run] repo={repo} ref={ref} top={top_n} output={output_dir}")
     ranking = fetch_top_skills(top_n)
     if not ranking:
+        print("[run] no ranking, exiting")
         return 1
 
     results: list[dict[str, object]] = []
@@ -366,6 +385,7 @@ def main() -> int:
         slug_guess = str(entry["slug_guess"])
         downloads = str(entry.get("downloads") or "?")
         stars = str(entry.get("stars") or "?")
+        print(f"[skill] #{idx} {owner}/{slug_guess} ({downloads} dl, {stars} ★)")
 
         meta = fetch_meta(repo, ref, owner, slug_guess)
         canonical_slug = str(meta.get("slug") if meta else slug_guess)  # type: ignore[union-attr]
@@ -388,8 +408,10 @@ def main() -> int:
         archived = download_skill_dir(repo, ref, owner, slug_path, skills_dir)
         if archived:
             success += 1
+            print(f"[skill] archived: {owner}/{slug_path}")
         else:
             failed += 1
+            print(f"[skill] archive failed: {owner}/{slug_path}")
 
         results.append(
             {
@@ -418,6 +440,7 @@ def main() -> int:
 
     _prune_dir(meta_dir, keep_meta)
     _prune_skill_tree(skills_dir, keep_skills)
+    print(f"[run] done: success={success} failed={failed}")
 
     scraped_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     manifest = {

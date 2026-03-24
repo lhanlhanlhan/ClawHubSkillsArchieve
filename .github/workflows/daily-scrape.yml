@@ -9,6 +9,10 @@ on:
         description: "Top N skills to archive"
         required: true
         default: "50"
+      mode:
+        description: "Mode: artifact or push"
+        required: true
+        default: "artifact"
 
 permissions:
   contents: write
@@ -18,6 +22,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       TOP_N: ${{ github.event.inputs.top_n || '50' }}
+      MODE: ${{ github.event.inputs.mode || 'artifact' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -31,7 +36,15 @@ jobs:
         run: |
           python3 scrape_clawhub_top_skills.py --top "$TOP_N"
 
+      - name: Upload artifact
+        if: ${{ env.MODE == 'artifact' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: clawhub-top-${{ env.TOP_N }}-${{ github.run_id }}
+          path: archives/top${{ env.TOP_N }}
+
       - name: Commit and push results
+        if: ${{ env.MODE == 'push' }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
