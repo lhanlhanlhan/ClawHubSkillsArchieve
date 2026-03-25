@@ -24,6 +24,7 @@ import re
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 
 
@@ -49,6 +50,9 @@ def _fetch_bytes(url: str, *, accept: str, retries: int = 3, delay_s: float = 1.
             req = urllib.request.Request(url, headers=_github_headers(accept))
             with urllib.request.urlopen(req, timeout=45) as resp:
                 return resp.read()
+        except UnicodeEncodeError:
+            print(f"[fetch] url encode error: {url}")
+            return None
         except urllib.error.HTTPError as e:
             if e.code == 404:
                 print(f"[fetch] 404: {url}")
@@ -185,7 +189,13 @@ def fetch_top_skills(top_n: int) -> list[dict[str, object]]:
 
 
 def _github_raw_url(repo: str, ref: str, path: str) -> str:
-    return f"https://raw.githubusercontent.com/{repo}/{ref}/{path}"
+    encoded_path = urllib.parse.quote(path, safe="/")
+    return f"https://raw.githubusercontent.com/{repo}/{ref}/{encoded_path}"
+
+
+def _github_contents_url(repo: str, path: str) -> str:
+    encoded_path = urllib.parse.quote(path, safe="/")
+    return f"https://api.github.com/repos/{repo}/contents/{encoded_path}"
 
 
 def fetch_meta(repo: str, ref: str, owner: str, slug: str) -> dict[str, object] | None:
@@ -202,7 +212,7 @@ def fetch_meta(repo: str, ref: str, owner: str, slug: str) -> dict[str, object] 
 
 
 def _list_repo_files_recursive(repo: str, path: str) -> list[dict[str, str]]:
-    url = f"https://api.github.com/repos/{repo}/contents/{path}"
+    url = _github_contents_url(repo, path)
     data = _fetch_json(url, retries=3)
     if not isinstance(data, list):
         print(f"[list] no content list: {path}")
@@ -264,7 +274,7 @@ def _prune_skill_tree(skills_dir: str, keep: set[tuple[str, str]]) -> None:
 
 
 def _has_contents_api_dir(repo: str, path: str) -> bool:
-    url = f"https://api.github.com/repos/{repo}/contents/{path}"
+    url = _github_contents_url(repo, path)
     data = _fetch_json(url, retries=2)
     return isinstance(data, list) and len(data) > 0
 
@@ -392,52 +402,56 @@ def main() -> int:
         stars = str(entry.get("stars") or "?")
         print(f"[skill] #{idx} {owner}/{slug_guess} ({downloads} dl, {stars} ★)")
 
-        meta = fetch_meta(repo, ref, owner, slug_guess)
-        canonical_slug = str(meta.get("slug") if meta else slug_guess)  # type: ignore[union-attr]
-        display_name = str(meta.get("displayName") if meta else entry.get("display_name") or slug_guess)  # type: ignore[union-attr]
-        latest = meta.get("latest") if isinstance(meta, dict) else None
-        version = str(latest.get("version") if isinstance(latest, dict) else "unknown")
-        published_at = int(latest.get("publishedAt") if isinstance(latest, dict) else 0)
-        commit_url = str(latest.get("commit") if isinstance(latest, dict) else "")
+        try:
+            meta = fetch_meta(repo, ref, owner, slug_guess)
+            canonical_slug = str(meta.get("slug") if meta else slug_guess)  # type: ignore[union-attr]
+            display_name = str(meta.get("displayName") if meta else entry.get("display_name") or slug_guess)  # type: ignore[union-attr]
+            latest = meta.get("latest") if isinstance(meta, dict) else None
+            version = str(latest.get("version") if isinstance(latest, dict) else "unknown")
+            published_at = int(latest.get("publishedAt") if isinstance(latest, dict) else 0)
+            commit_url = str(latest.get("commit") if isinstance(latest, dict) else "")
 
-        slug_path = _resolve_slug_path(repo, owner, slug_guess, canonical_slug)
+            slug_path = _resolve_slug_path(repo, owner, slug_guess, canonical_slug)
 
-        meta_filename = f"{_safe_filename(owner)}__{_safe_filename(canonical_slug)}__meta.json"
-        meta_path = os.path.join(meta_dir, meta_filename)
-        if meta:
-            _write_json(meta_path, meta)
-            keep_meta.add(meta_filename)
+            meta_filename = f"{_safe_filename(owner)}__{_safe_filename(canonical_slug)}__meta.json"
+            meta_path = os.path.join(meta_dir, meta_filename)
+            if meta:
+                _write_json(meta_path, meta)
+                keep_meta.add(meta_filename)
 
-        keep_skills.add((owner, slug_path))
+            keep_skills.add((owner, slug_path))
 
-        archived = download_skill_dir(repo, ref, owner, slug_path, skills_dir)
-        if archived:
-            success += 1
-            print(f"[skill] archived: {owner}/{slug_path}")
-        else:
+            archived = download_skill_dir(repo, ref, owner, slug_path, skills_dir)
+            if archived:
+                success += 1
+                print(f"[skill] archived: {owner}/{slug_path}")
+            else:
+                failed += 1
+                print(f"[skill] archive failed: {owner}/{slug_path}")
+
+            results.append(
+                {
+                    "rank": idx,
+                    "owner": owner,
+                    "slug": canonical_slug,
+                    "slug_path": slug_path,
+                    "version": version,
+                    "display_name": display_name,
+                    "downloads": downloads,
+                    "installs": downloads if sort_by == "installs" else None,
+                    "stars": stars,
+                    "published_at": published_at,
+                    "commit": commit_url or None,
+                    "clawhub_url": f"https://clawhub.ai/{owner}/{canonical_slug}",
+                    "github_url": f"https://github.com/{repo}/tree/{ref}/skills/{owner}/{slug_path}",
+                    "archive_dir": f"skills/{owner}/{slug_path}",
+                    "archived": archived,
+                    "meta_file": f"metadata/{meta_filename}" if meta else None,
+                }
+            )
+        except Exception as e:
             failed += 1
-            print(f"[skill] archive failed: {owner}/{slug_path}")
-
-        results.append(
-            {
-                "rank": idx,
-                "owner": owner,
-                "slug": canonical_slug,
-                "slug_path": slug_path,
-                "version": version,
-                "display_name": display_name,
-                "downloads": downloads,
-                "installs": downloads if sort_by == "installs" else None,
-                "stars": stars,
-                "published_at": published_at,
-                "commit": commit_url or None,
-                "clawhub_url": f"https://clawhub.ai/{owner}/{canonical_slug}",
-                "github_url": f"https://github.com/{repo}/tree/{ref}/skills/{owner}/{slug_path}",
-                "archive_dir": f"skills/{owner}/{slug_path}",
-                "archived": archived,
-                "meta_file": f"metadata/{meta_filename}" if meta else None,
-            }
-        )
+            print(f"[skill] error: {owner}/{slug_guess} ({e})")
 
         if idx % 10 == 0:
             time.sleep(1.0)
